@@ -6,6 +6,7 @@ const PAGES = [
   { file: "projects.html",    name: "项目管理",     desc: "项目总览" },
   { file: "cases.html",       name: "测试用例",     desc: "步骤与断言" },
   { file: "suites.html",      name: "套件与分组",   desc: "组织用例" },
+  { file: "plans.html",       name: "测试计划",     desc: "版本与进度" },
   { file: "monitor.html",     name: "执行监控",     desc: "实时日志状态" },
   { file: "reports.html",     name: "测试报告",     desc: "通过率耗时" },
   { file: "coverage.html",    name: "代码覆盖率",   desc: "覆盖率分析" },
@@ -17,6 +18,7 @@ const PAGES = [
 
 const PAGE_NAMES = {
   projects: "项目管理", cases: "测试用例", suites: "测试套件与分组",
+  plans: "测试计划",
   monitor: "执行监控", reports: "测试报告", coverage: "代码覆盖率",
   defects: "缺陷跟踪", environments: "环境管理", schedules: "定时任务与触发",
   notifications: "通知与集成",
@@ -25,6 +27,7 @@ const PAGE_NAMES = {
 const STATUS_LABELS = {
   pending: "等待中", running: "运行中", passed: "通过", failed: "失败",
   cancelled: "已取消", error: "错误", skipped: "跳过", timeout: "超时",
+  untested: "未执行", blocked: "阻塞",
 };
 
 const PRIORITY_LABELS = { P0: "P0 · 最高", P1: "P1 · 高", P2: "P2 · 中", P3: "P3 · 低" };
@@ -34,7 +37,7 @@ function renderNav(activeFile) {
   const host = document.getElementById("site-sidebar");
   if (!host) return;
   let links = PAGES.map((p, i) => {
-    const cls = p.file === activeFile ? ' class="active"' : "";
+    const cls = (p.file === activeFile || p.file === activeFile + ".html") ? ' class="active"' : "";
     return `<a href="/page/${p.file}"${cls}><span class="idx">${String(i + 1).padStart(2, "0")}</span>${p.name}</a>`;
   }).join("");
   host.innerHTML = `

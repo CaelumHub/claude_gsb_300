@@ -72,6 +72,9 @@ async function init() {
   const params = new URLSearchParams(location.search);
   projectId = await fillProjectSelect($("#project-select"), params.get("project_id"));
   await loadBuilds();
+  // 支持 ?build_id= 深链（如从测试计划页回链到具体构建）
+  const bid = params.get("build_id");
+  if (bid && builds.find(b => b.id === bid)) { selectBuild(bid); return; }
   // 自动选中最近一个运行中的构建
   const running = builds.find(b => b.status === "running");
   if (running) selectBuild(running.id);

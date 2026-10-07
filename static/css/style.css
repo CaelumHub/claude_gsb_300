@@ -188,6 +188,11 @@ td .mono { font-size: 12px; color: var(--text-muted); }
 .badge.timeout { background: #fef3e2; color: var(--amber); }
 .badge.blue { background: var(--primary-soft); color: var(--blue); }
 .badge.violet { background: #f3e8ff; color: var(--violet); }
+.badge.untested { background: #f1f5f9; color: #94a3b8; }
+.badge.blocked, .badge.overdue { background: #fdecec; color: var(--red); }
+.badge.reached, .badge.completed { background: #e7f6ec; color: var(--green); }
+.badge.upcoming, .badge.active { background: var(--primary-soft); color: var(--primary); }
+.badge.draft, .badge.archived { background: #f1f5f9; color: #64748b; }
 
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .dot.green { background: var(--green); }

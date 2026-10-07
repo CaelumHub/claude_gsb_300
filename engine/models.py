@@ -18,6 +18,12 @@ BUILD_STATUSES = ["pending", "running", "passed", "failed", "cancelled", "error"
 SEVERITIES = ["blocker", "critical", "major", "minor", "trivial"]
 DEFECT_STATUSES = ["open", "in_progress", "fixed", "verified", "closed", "reopened"]
 
+# 测试计划状态流
+PLAN_STATUSES = ["draft", "active", "completed", "archived"]
+
+# 计划内用例的执行状态：构建结果状态之外，「未执行」表示最近构建中没有该用例
+ITEM_UNTESTED = "untested"
+
 # 通知集成类型
 INTEGRATION_TYPES = ["webhook", "slack", "email", "dingtalk"]
 

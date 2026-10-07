@@ -127,17 +127,51 @@ def seed_demo_data(registry, env_mgr, notify_mgr) -> dict:
         "created_at": time.time(),
     })
 
+    # -- 演示测试计划：按版本组织，用例分派给不同测试人员 --------------------
+    now = time.time()
+    day = 86400
+    plan = {
+        "id": new_id("plan"),
+        "project_id": pid,
+        "name": "v2.31.0 版本回归测试",
+        "version": "v2.31.0",
+        "description": "版本上线前回归：核心链路 + 接口 + 单元断言。",
+        "status": "active",
+        "start_at": now - 2 * day,
+        "end_at": now + 5 * day,
+        "milestones": [
+            {"id": new_id("ms"), "name": "提测", "due_at": now - 1 * day},
+            {"id": new_id("ms"), "name": "回归完成", "due_at": now + 3 * day},
+            {"id": new_id("ms"), "name": "灰度发布", "due_at": now + 5 * day},
+        ],
+        "items": [
+            {"case_id": c1, "assignee": "王芳", "blocked": False, "note": "", "added_at": now},
+            {"case_id": c2, "assignee": "王芳", "blocked": False, "note": "", "added_at": now},
+            {"case_id": c3, "assignee": "李强", "blocked": False, "note": "", "added_at": now},
+            {"case_id": c4, "assignee": "李强", "blocked": False, "note": "", "added_at": now},
+            {"case_id": c5, "assignee": "赵敏", "blocked": False, "note": "", "added_at": now},
+            {"case_id": c6, "assignee": "赵敏", "blocked": True,
+             "note": "失败注入接口依赖混沌环境，待环境就绪", "added_at": now},
+            {"case_id": c7, "assignee": "王芳", "blocked": False, "note": "", "added_at": now},
+            {"case_id": c8, "assignee": "李强", "blocked": False, "note": "", "added_at": now},
+        ],
+        "notice_marks": {},
+        "created_at": now,
+    }
+    registry.store("plans").insert(plan)
+
     notify_mgr.create(pid, {
         "type": "webhook",
         "name": "CI Webhook",
         "config": {"url": "https://example.com/hooks/ci"},
-        "events": ["build.finished", "build.failed"],
+        "events": ["build.finished", "build.failed", "plan.overdue"],
     })
     notify_mgr.create(pid, {
         "type": "email",
         "name": "团队邮件",
         "config": {"address": "qa@example.com"},
-        "events": ["build.failed"],
+        "events": ["build.failed", "plan.overdue"],
     })
 
-    return {"project": proj, "env_id": env["id"], "suite_id": suite["id"]}
+    return {"project": proj, "env_id": env["id"], "suite_id": suite["id"],
+            "plan_id": plan["id"]}

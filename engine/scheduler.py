@@ -34,7 +34,7 @@ class Scheduler:
     def __init__(self, registry, build_registry, executor, env_manager,
                  report_gen, coverage_analyzer, defect_manager, notify_manager,
                  max_build_workers: int = 4, max_case_workers: int = 8,
-                 tick_seconds: float = 20.0):
+                 tick_seconds: float = 20.0, plan_manager=None):
         self.registry = registry
         self.builds = build_registry
         self.executor = executor
@@ -43,6 +43,7 @@ class Scheduler:
         self.coverage = coverage_analyzer
         self.defects = defect_manager
         self.notify = notify_manager
+        self.plans = plan_manager
 
         self.max_build_workers = max_build_workers
         self.max_case_workers = max_case_workers
@@ -280,7 +281,22 @@ class Scheduler:
                 self._scan_schedules()
             except Exception:  # noqa: BLE001
                 pass
+            try:
+                self._scan_plans()
+            except Exception:  # noqa: BLE001
+                pass
             self._stop_event.wait(self.tick_seconds)
+
+    def _scan_plans(self) -> None:
+        """扫描测试计划的逾期情况并投递提醒（每天每计划/里程碑最多一次）。
+
+        去重由 :meth:`engine.plans.PlanManager.scan_overdue` 负责，
+        这里只把待通知列表投递给订阅了 ``plan.overdue`` 事件的集成。
+        """
+        if self.plans is None:
+            return
+        for notice in self.plans.scan_overdue():
+            self.notify.fire(notice["project_id"], "plan.overdue", notice)
 
     def _scan_schedules(self) -> None:
         # 串行化扫描，避免多个线程（后台 tick + 手动触发）同时读到

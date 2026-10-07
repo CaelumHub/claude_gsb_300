@@ -57,6 +57,10 @@ def _notify():
     return current_app.config["NOTIFY"]
 
 
+def _plans():
+    return current_app.config["PLANS"]
+
+
 def _payload() -> dict:
     return request.get_json(silent=True) or {}
 
@@ -324,6 +328,147 @@ def list_groups(project_id: str):
             for t in tags:
                 groups[t] = groups.get(t, 0) + 1
     return jsonify({"groups": [{"name": k, "count": v} for k, v in sorted(groups.items())]})
+
+
+# ---------------------------------------------------------------------------
+# 测试计划（按版本组织：分派、进度、里程碑、逾期提醒）
+#
+# 一致性设计：计划进度不冗余存储，所有执行状态在请求时从构建结果存储
+# 实时推导（与监控页 / 报告页同源），因此各页面数字永远一致。
+# ---------------------------------------------------------------------------
+
+def _plan_or_404(plan_id: str):
+    plan = _plans().get(plan_id)
+    if plan is None:
+        return None, _err("测试计划不存在", 404)
+    return plan, None
+
+
+@api.get("/projects/<project_id>/plans")
+def list_plans(project_id: str):
+    """计划列表，每个计划附实时进度汇总（整体 / 按人 / 阻塞 / 逾期）。"""
+    plans = _plans().list(project_id, status=request.args.get("status"))
+    lookback = request.args.get("lookback", 10, type=int)
+    return jsonify({"plans": _plans().summarize(plans, lookback=lookback)})
+
+
+@api.post("/projects/<project_id>/plans")
+def create_plan(project_id: str):
+    if _store("projects").get(project_id) is None:
+        return _err("项目不存在", 404)
+    data = _payload()
+    if not (data.get("name") or "").strip():
+        return _err("计划名称不能为空")
+    try:
+        plan = _plans().create(project_id, data)
+    except ValueError as exc:
+        return _err(str(exc))
+    return jsonify(plan)
+
+
+@api.get("/plans/<plan_id>")
+def get_plan(plan_id: str):
+    """计划详情：配置 + 每条用例的实时执行状态与来源构建。"""
+    plan, err = _plan_or_404(plan_id)
+    if err:
+        return err
+    lookback = request.args.get("lookback", 10, type=int)
+    progress = _plans().compute_progress(plan, lookback=lookback)
+    # 附上用例名称 / 优先级，便于前端直接渲染
+    cases = {c["id"]: c for c in _store("cases").get_many(
+        [it["case_id"] for it in plan.get("items") or []])}
+    for row in progress.get("items", []):
+        c = cases.get(row["case_id"]) or {}
+        row["case_name"] = c.get("name", row["case_id"])
+        row["priority"] = c.get("priority")
+        row["tags"] = c.get("tags") or []
+    out = dict(plan)
+    out["progress"] = progress
+    return jsonify(out)
+
+
+@api.put("/plans/<plan_id>")
+def update_plan(plan_id: str):
+    plan, err = _plan_or_404(plan_id)
+    if err:
+        return err
+    data = _payload()
+    patch = {k: data[k] for k in ("name", "version", "description", "status",
+                                  "start_at", "end_at", "milestones") if k in data}
+    try:
+        updated = _plans().update(plan_id, patch)
+    except ValueError as exc:
+        return _err(str(exc))
+    return jsonify(updated)
+
+
+@api.delete("/plans/<plan_id>")
+def delete_plan(plan_id: str):
+    _plans().delete(plan_id)
+    return jsonify({"ok": True})
+
+
+@api.put("/plans/<plan_id>/items")
+def upsert_plan_items(plan_id: str):
+    """批量分派 / 改派用例：body {"items": [{"case_id", "assignee"}]}。"""
+    plan, err = _plan_or_404(plan_id)
+    if err:
+        return err
+    data = _payload()
+    items = data.get("items")
+    if not isinstance(items, list):
+        return _err("items 必须是数组")
+    updated = _plans().upsert_items(plan_id, items)
+    return jsonify(updated)
+
+
+@api.put("/plans/<plan_id>/items/<case_id>")
+def update_plan_item(plan_id: str, case_id: str):
+    """更新单条分派：负责人 / 阻塞标记 / 备注。"""
+    plan, err = _plan_or_404(plan_id)
+    if err:
+        return err
+    data = _payload()
+    patch = {k: data[k] for k in ("assignee", "blocked", "note") if k in data}
+    updated = _plans().update_item(plan_id, case_id, patch)
+    if updated is None:
+        return _err("该用例不在计划中", 404)
+    return jsonify(updated)
+
+
+@api.delete("/plans/<plan_id>/items/<case_id>")
+def remove_plan_item(plan_id: str, case_id: str):
+    updated = _plans().remove_item(plan_id, case_id)
+    if updated is None:
+        return _err("测试计划不存在", 404)
+    return jsonify(updated)
+
+
+@api.post("/plans/<plan_id>/clone")
+def clone_plan(plan_id: str):
+    """复制计划作为新版本的起点（保留分派，重置阻塞与备注）。"""
+    plan, err = _plan_or_404(plan_id)
+    if err:
+        return err
+    cloned = _plans().clone(plan_id, _payload())
+    return jsonify(cloned)
+
+
+@api.get("/plans/<plan_id>/progress")
+def plan_progress(plan_id: str):
+    """实时进度汇总（整体 / 按人 / 阻塞项 / 逾期用例）。"""
+    lookback = request.args.get("lookback", 10, type=int)
+    progress = _plans().progress(plan_id, lookback=lookback)
+    if progress is None:
+        return _err("测试计划不存在", 404)
+    return jsonify(progress)
+
+
+@api.get("/projects/<project_id>/workload")
+def project_workload(project_id: str):
+    """跨计划、按测试人员汇总剩余工作量与阻塞项。"""
+    lookback = request.args.get("lookback", 10, type=int)
+    return jsonify(_plans().workload(project_id, lookback=lookback))
 
 
 # ---------------------------------------------------------------------------
