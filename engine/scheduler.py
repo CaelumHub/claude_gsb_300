@@ -71,7 +71,8 @@ class Scheduler:
     # ------------------------------------------------------------------ 触发
     def submit_build(self, project_id: str, suite_id: str,
                      env_id: Optional[str] = None, trigger: str = "manual",
-                     schedule_id: Optional[str] = None) -> dict:
+                     schedule_id: Optional[str] = None,
+                     plan_id: Optional[str] = None) -> dict:
         """提交一场构建，立即返回构建元信息（构建在后台线程池运行）。"""
         suites = self.registry.store("suites")
         cases_store = self.registry.store("cases")
@@ -101,6 +102,7 @@ class Scheduler:
             env_id=env_id,
             name=suite.get("name", ""),
             trigger=trigger,
+            plan_id=plan_id or suite.get("plan_id"),
         )
 
         cancel_event = threading.Event()

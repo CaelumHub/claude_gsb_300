@@ -9,6 +9,7 @@
 - :mod:`engine.coverage`    代码覆盖率分析（模拟，按构建稳定生成）
 - :mod:`engine.report`      测试报告生成（通过率 / 耗时 / 分组 / 趋势）
 - :mod:`engine.defects`     缺陷跟踪
+- :mod:`engine.plans`       测试计划（版本 / 里程碑 / 分派 / 进度派生）
 - :mod:`engine.notify`      通知与集成
 - :mod:`engine.scheduler`   并发调度（构建池 + 用例池 + 定时触发循环）
 """
@@ -17,6 +18,7 @@ from .models import (
     PRIORITIES,
     CASE_STATUSES,
     BUILD_STATUSES,
+    PLAN_STATUSES,
     new_id,
     now,
 )
@@ -26,6 +28,7 @@ from .environments import EnvironmentManager
 from .coverage import CoverageAnalyzer
 from .report import ReportGenerator
 from .defects import DefectManager
+from .plans import PlanManager
 from .notify import NotificationManager
 from .scheduler import Scheduler
 
@@ -33,6 +36,7 @@ __all__ = [
     "PRIORITIES",
     "CASE_STATUSES",
     "BUILD_STATUSES",
+    "PLAN_STATUSES",
     "new_id",
     "now",
     "CronSchedule",
@@ -44,6 +48,7 @@ __all__ = [
     "CoverageAnalyzer",
     "ReportGenerator",
     "DefectManager",
+    "PlanManager",
     "NotificationManager",
     "Scheduler",
 ]

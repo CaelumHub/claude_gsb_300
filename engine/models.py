@@ -22,7 +22,17 @@ DEFECT_STATUSES = ["open", "in_progress", "fixed", "verified", "closed", "reopen
 INTEGRATION_TYPES = ["webhook", "slack", "email", "dingtalk"]
 
 # 触发来源
-TRIGGER_TYPES = ["manual", "schedule", "webhook", "ci"]
+TRIGGER_TYPES = ["manual", "schedule", "webhook", "ci", "plan"]
+
+# 测试计划状态
+PLAN_STATUSES = ["draft", "active", "completed", "archived"]
+
+# 计划下用例的执行状态：
+# blocked  阻塞（计划维度手工标记，不覆盖构建结果语义）
+# none     尚无任何执行结果
+# 其余复用 CASE_STATUSES
+PLAN_CASE_STATUSES = ["passed", "failed", "error", "skipped", "timeout",
+                      "blocked", "none"]
 
 
 def new_id(prefix: str) -> str:

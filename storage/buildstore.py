@@ -59,6 +59,7 @@ def _empty_build(build_id: str, project_id: str, **kw: Any) -> dict:
         "env_id": kw.get("env_id"),
         "name": kw.get("name", ""),
         "trigger": kw.get("trigger", "manual"),
+        "plan_id": kw.get("plan_id"),
         "status": "pending",
         "total": 0,
         "passed": 0,

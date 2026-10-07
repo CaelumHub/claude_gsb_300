@@ -57,6 +57,10 @@ def _notify():
     return current_app.config["NOTIFY"]
 
 
+def _plans():
+    return current_app.config["PLANS"]
+
+
 def _payload() -> dict:
     return request.get_json(silent=True) or {}
 
@@ -689,6 +693,123 @@ def list_events(project_id: str):
 
 
 # ---------------------------------------------------------------------------
+# 测试计划（版本 / 里程碑 / 分派 / 进度）
+# ---------------------------------------------------------------------------
+
+@api.get("/projects/<project_id>/plans")
+def list_plans(project_id: str):
+    status = request.args.get("status")
+    return jsonify({"plans": _plans().list(project_id, status=status)})
+
+
+@api.post("/projects/<project_id>/plans")
+def create_plan(project_id: str):
+    if _store("projects").get(project_id) is None:
+        return _err("项目不存在", 404)
+    result = _plans().create(project_id, _payload())
+    if "error" in result:
+        return _err(result["error"])
+    return jsonify(result)
+
+
+@api.get("/plans/<plan_id>")
+def get_plan(plan_id: str):
+    plan = _plans().detail(plan_id)
+    if plan is None:
+        return _err("计划不存在", 404)
+    return jsonify(plan)
+
+
+@api.put("/plans/<plan_id>")
+def update_plan(plan_id: str):
+    data = _payload()
+    patch = {k: data[k] for k in ("name", "version", "description", "status",
+                                  "start_at", "end_at", "build_window",
+                                  "milestones") if k in data}
+    updated = _plans().update(plan_id, patch)
+    if updated is None:
+        return _err("计划不存在", 404)
+    return jsonify(_plans().detail(plan_id))
+
+
+@api.delete("/plans/<plan_id>")
+def delete_plan(plan_id: str):
+    if not _plans().delete(plan_id):
+        return _err("计划不存在", 404)
+    return jsonify({"ok": True})
+
+
+@api.post("/plans/<plan_id>/copy")
+def copy_plan(plan_id: str):
+    result = _plans().copy(plan_id, _payload())
+    if "error" in result:
+        return _err(result["error"], 404)
+    return jsonify(result)
+
+
+@api.post("/plans/<plan_id>/cases")
+def add_plan_cases(plan_id: str):
+    data = _payload()
+    result = _plans().add_cases(
+        plan_id, data.get("case_ids") or [],
+        assignee=data.get("assignee", ""), due_at=data.get("due_at"))
+    if "error" in result:
+        return _err(result["error"], 404)
+    return jsonify(result)
+
+
+@api.put("/plans/cases/<item_id>")
+def update_plan_case(item_id: str):
+    data = _payload()
+    patch = {k: data[k] for k in ("assignee", "due_at", "manual_status",
+                                  "manual_by", "block_reason") if k in data}
+    updated = _plans().update_case(item_id, patch)
+    if updated is None:
+        return _err("计划成员不存在", 404)
+    return jsonify(updated)
+
+
+@api.delete("/plans/cases/<item_id>")
+def remove_plan_case(item_id: str):
+    if not _plans().remove_case(item_id):
+        return _err("计划成员不存在", 404)
+    return jsonify({"ok": True})
+
+
+@api.post("/plans/<plan_id>/run")
+def run_plan(plan_id: str):
+    """从计划页触发执行，构建带 plan_id，执行结果自动回链本计划。"""
+    data = _payload()
+    result = _plans().submit_run(plan_id, _scheduler(),
+                                 env_id=data.get("env_id"))
+    if "error" in result:
+        return _err(result["error"])
+    return jsonify(result)
+
+
+@api.get("/projects/<project_id>/workload")
+def plan_workload(project_id: str):
+    """跨多个进行中计划、多个测试人员汇总剩余工作量。"""
+    return jsonify(_plans().workload(
+        project_id, assignee=request.args.get("assignee")))
+
+
+@api.get("/projects/<project_id>/overdue")
+def overdue_summary(project_id: str):
+    """跨计划的逾期未完成用例汇总（供版本上线前检查与提醒）。"""
+    return jsonify({"plans": _plans().overdue_across_plans(project_id)})
+
+
+@api.post("/plans/<plan_id>/remind")
+def plan_remind(plan_id: str):
+    """把逾期未完成 / 阻塞项推送到已配置的通知集成。"""
+    result = _plans().send_reminders(plan_id)
+    if "error" in result:
+        return _err(result["error"], 404)
+    return jsonify(result)
+
+
+# ---------------------------------------------------------------------------
 # 演示数据
 # ---------------------------------------------------------------------------
 
@@ -696,4 +817,4 @@ def list_events(project_id: str):
 def seed_demo():
     """一键生成演示项目（含用例 / 套件 / 环境 / 计划 / 集成）。"""
     from .seed import seed_demo_data
-    return jsonify(seed_demo_data(_registry(), _env_mgr(), _notify()))
+    return jsonify(seed_demo_data(_registry(), _builds(), _env_mgr(), _notify()))

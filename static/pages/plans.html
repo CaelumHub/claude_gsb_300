@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>测试计划 - 自动化测试与持续集成平台</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    .plan-item { border: 1px solid var(--border); border-radius: 9px; padding: 12px 14px; margin-bottom: 10px; cursor: pointer; }
+    .plan-item:hover { border-color: var(--primary); }
+    .plan-item.active { border-color: var(--primary); background: var(--primary-soft); }
+    .ms-item { display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px dashed var(--border); }
+    .member-src { font-size:11px; color:var(--text-muted); margin-left:6px; }
+    table.compact th, table.compact td { padding: 6px 9px; font-size:13px; }
+    .mini-input { padding:5px 8px !important; font-size:13px !important; }
+    .pager-hint { font-size:12px; }
+  </style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="site-sidebar"></aside>
+
+  <main class="main">
+    <h1 class="page-title">测试计划（版本）</h1>
+    <p class="page-desc">按版本建计划、关联时间范围与里程碑、分派用例给测试人员。执行状态实时取自最近构建，与监控页/报告页同源，不再人工汇总。</p>
+
+    <div class="card">
+      <div class="row">
+        <label style="margin:0 6px 0 0;align-self:center">项目</label>
+        <select id="project-select" style="max-width:240px" onchange="switchProject(this.value)"></select>
+        <select id="plan-status-filter" style="max-width:140px" onchange="loadPlans()">
+          <option value="">全部状态</option>
+          <option value="active">进行中</option>
+          <option value="draft">草稿</option>
+          <option value="completed">已完成</option>
+          <option value="archived">已归档</option>
+        </select>
+        <span style="flex:1"></span>
+        <button class="btn" id="btn-new">新建计划</button>
+      </div>
+    </div>
+
+    <!-- 跨计划工作量汇总 -->
+    <section class="card" id="workload-card">
+      <h2>跨计划剩余工作量</h2>
+      <div id="workload"><div class="empty">加载中…</div></div>
+    </section>
+
+    <div class="grid cols-2">
+      <!-- 左：计划列表 + 编辑表单 -->
+      <div>
+        <section class="card">
+          <h2>版本计划</h2>
+          <div id="plan-list"><div class="empty">加载中…</div></div>
+        </section>
+
+        <section class="card" id="edit-card">
+          <h2 id="edit-title">新建计划</h2>
+          <div><label>计划名称 *</label><input type="text" id="f-name" placeholder="v2.31 版本测试"></div>
+          <div class="mt"><label>版本号</label><input type="text" id="f-version" placeholder="v2.31"></div>
+          <div class="grid cols-3 mt">
+            <div><label>开始日期</label><input type="date" id="f-start"></div>
+            <div><label>结束日期</label><input type="date" id="f-end"></div>
+            <div><label>构建窗口</label><input type="number" id="f-window" value="5" min="1" max="50"></div>
+          </div>
+          <div class="mt"><label>描述</label><textarea id="f-desc" style="min-height:60px"></textarea></div>
+          <div class="mt">
+            <label>里程碑节点（名称 + 截止日期）</label>
+            <div id="ms-editor"></div>
+            <button class="btn small secondary mt" onclick="addMilestoneRow()">+ 添加里程碑</button>
+          </div>
+          <div class="row mt">
+            <button class="btn" id="btn-save">保存</button>
+            <button class="btn secondary" id="btn-cancel">取消</button>
+          </div>
+        </section>
+      </div>
+
+      <!-- 右：计划详情 -->
+      <div>
+        <section class="card" id="detail-card">
+          <div class="empty">请选择左侧计划查看详情</div>
+        </section>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="/static/js/common.js"></script>
+<script>
+renderNav("plans");
+
+let projectId = null;
+let plans = [];
+let currentPlanId = null;
+let currentDetail = null;
+let editingId = null;
+let allCases = [];
+
+async function init() {
+  const params = new URLSearchParams(location.search);
+  projectId = await fillProjectSelect($("#project-select"), params.get("project_id"));
+  if (projectId) await refreshAll();
+}
+
+async function switchProject(id) {
+  projectId = id; currentPlanId = null; currentDetail = null; editingId = null;
+  await refreshAll();
+}
+
+async function refreshAll() {
+  await Promise.all([loadPlans(), loadWorkload()]);
+  if (currentPlanId) loadDetail(currentPlanId);
+}
+
+/* ---------------- 跨计划工作量 ---------------- */
+async function loadWorkload() {
+  const d = await api(`/api/projects/${projectId}/workload`);
+  const people = d.by_assignee || [];
+  const byPlan = d.by_plan || [];
+  $("#workload").innerHTML = `
+    <div class="grid cols-4">
+      <div class="stat primary"><div class="v">${d.total_remaining}</div><div class="k">剩余用例（跨计划）</div></div>
+      <div class="stat bad"><div class="v">${d.total_blocked}</div><div class="k">阻塞项</div></div>
+      <div class="stat bad"><div class="v">${d.total_overdue}</div><div class="k">逾期未完成</div></div>
+      <div class="stat primary"><div class="v">${people.length}</div><div class="k">参与测试人员</div></div>
+    </div>
+    <div class="grid cols-2 mt">
+      <div>
+        <h3>按测试人员</h3>
+        <table class="compact">
+          <thead><tr><th>人员</th><th>总数</th><th>剩余</th><th>阻塞</th><th>逾期</th><th>涉及计划</th></tr></thead>
+          <tbody>${people.map(p => `<tr>
+            <td>${esc(p.assignee || "未分派")}</td><td>${p.total}</td>
+            <td><strong>${p.remaining}</strong></td>
+            <td style="color:${p.blocked?'var(--violet)':''}">${p.blocked}</td>
+            <td style="color:${p.overdue?'var(--red)':''}">${p.overdue}</td>
+            <td>${p.plan_count}</td></tr>`).join("") ||
+            '<tr><td colspan="6" class="muted">暂无分派</td></tr>'}</tbody>
+        </table>
+      </div>
+      <div>
+        <h3>按计划</h3>
+        <table class="compact">
+          <thead><tr><th>计划/版本</th><th>剩余</th><th>阻塞</th><th>逾期</th></tr></thead>
+          <tbody>${byPlan.map(p => `<tr style="cursor:pointer" onclick="loadDetail('${p.plan_id}')">
+            <td>${esc(p.version || p.name)}</td><td><strong>${p.remaining}</strong></td>
+            <td style="color:${p.blocked?'var(--violet)':''}">${p.blocked}</td>
+            <td style="color:${p.overdue?'var(--red)':''}">${p.overdue}</td></tr>`).join("") ||
+            '<tr><td colspan="4" class="muted">暂无计划</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="muted mt pager-hint">数据来源：各计划窗口内最近构建结果 + 计划分派配置，读取时实时聚合（${fmtTime(d.sources && d.sources.generated_at)}）。</div>`;
+}
+
+/* ---------------- 计划列表 ---------------- */
+async function loadPlans() {
+  const st = $("#plan-status-filter").value;
+  const d = await api(`/api/projects/${projectId}/plans${st ? `?status=${st}` : ""}`);
+  plans = d.plans || [];
+  const host = $("#plan-list");
+  if (!plans.length) { host.innerHTML = '<div class="empty">暂无计划，点「新建计划」开始</div>'; return; }
+  host.innerHTML = plans.map(p => {
+    const tstate = p.plan_time_state;
+    return `
+    <div class="plan-item ${p.id===currentPlanId?'active':''}" onclick="loadDetail('${p.id}')">
+      <div class="row spread">
+        <div class="row">
+          <strong>${esc(p.version || p.name)}</strong>
+          ${statusBadge(p.status)}
+          ${tstate === 'overdue' ? '<span class="badge overdue">计划逾期</span>' : ''}
+        </div>
+        <span class="muted" style="font-size:12px">${p.progress_pct}%</span>
+      </div>
+      <div class="mt">${progressBar(p.progress_pct/100, p.progress_pct>=100?'green':(tstate==='overdue'?'red':''))}</div>
+      <div class="row spread mt" style="font-size:12px;color:var(--text-muted)">
+        <span>共 ${p.total} · 剩余 ${p.remaining} · 阻塞 ${p.blocked} · 逾期 ${p.overdue_cases}</span>
+        <span>${fmtDate(p.start_at)} ~ ${fmtDate(p.end_at)}</span>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function fmtDate(ts) { return ts ? new Date(ts*1000).toLocaleDateString("zh-CN") : "—"; }
+function toDateInput(ts) {
+  if (!ts) return "";
+  const d = new Date(ts*1000);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+/* ---------------- 新建 / 编辑 ---------------- */
+function blankForm() {
+  $("#f-name").value = ""; $("#f-version").value = "";
+  $("#f-start").value = ""; $("#f-end").value = ""; $("#f-window").value = 5;
+  $("#f-desc").value = "";
+  $("#ms-editor").innerHTML = "";
+  addMilestoneRow(); addMilestoneRow();
+}
+
+function addMilestoneRow(name = "", due = "") {
+  const row = document.createElement("div");
+  row.className = "row mt";
+  row.innerHTML = `
+    <input type="text" class="ms-name mini-input" placeholder="里程碑名称" style="flex:2" value="${esc(name)}">
+    <input type="date" class="ms-due mini-input" style="flex:1" value="${esc(due)}">
+    <button type="button" class="btn small danger" onclick="this.parentNode.remove()">删</button>`;
+  $("#ms-editor").appendChild(row);
+}
+
+function collectForm() {
+  const milestones = $$("#ms-editor .row").map(r => ({
+    name: $(".ms-name", r).value.trim(),
+    due_at: $(".ms-due", r).value,
+  })).filter(m => m.name && m.due_at);
+  return {
+    name: $("#f-name").value.trim(),
+    version: $("#f-version").value.trim(),
+    start_at: $("#f-start").value || null,
+    end_at: $("#f-end").value || null,
+    build_window: Number($("#f-window").value || 5),
+    description: $("#f-desc").value,
+    milestones,
+  };
+}
+
+$("#btn-new").onclick = () => { editingId = null; $("#edit-title").textContent = "新建计划"; blankForm(); };
+$("#btn-cancel").onclick = () => { editingId = null; $("#edit-title").textContent = "新建计划"; blankForm(); };
+
+$("#btn-save").onclick = async () => {
+  const body = collectForm();
+  if (!body.name) return toast("请输入计划名称", "error");
+  try {
+    if (editingId) {
+      await api(`/api/plans/${editingId}`, { method: "PUT", body });
+      toast("计划已更新");
+    } else {
+      const created = await api(`/api/projects/${projectId}/plans`, { method: "POST", body });
+      editingId = created.id;
+      toast("计划已创建");
+    }
+  } catch (e) { return toast(e.message, "error"); }
+  await loadPlans();
+  loadDetail(editingId);
+};
+
+function editPlan() {
+  if (!currentDetail) return;
+  editingId = currentDetail.id;
+  $("#edit-title").textContent = "编辑计划";
+  const p = currentDetail;
+  $("#f-name").value = p.name || ""; $("#f-version").value = p.version || "";
+  $("#f-start").value = toDateInput(p.start_at); $("#f-end").value = toDateInput(p.end_at);
+  $("#f-window").value = p.build_window || 5; $("#f-desc").value = p.description || "";
+  $("#ms-editor").innerHTML = "";
+  (p.milestones || []).forEach(m => addMilestoneRow(m.name, toDateInput(m.due_at)));
+  if (!p.milestones || !p.milestones.length) addMilestoneRow();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+/* ---------------- 计划详情 ---------------- */
+async function loadDetail(id) {
+  currentPlanId = id;
+  loadPlans();
+  currentDetail = await api(`/api/plans/${id}`);
+  const p = currentDetail;
+  const s = p.progress;
+  const overdueMs = (p.milestones || []).filter(m => m.state === "overdue");
+  const barCls = s.progress_pct >= 100 ? "green" : (overdueMs.length || s.overdue_cases ? "red" : "");
+
+  $("#detail-card").innerHTML = `
+    <div class="row spread">
+      <div class="row">
+        <h2 style="margin:0">${esc(p.name)}</h2>
+        ${statusBadge(p.status)}
+        ${p.plan_time_state === 'overdue' ? '<span class="badge overdue">计划已逾期</span>' : ''}
+      </div>
+      <div class="row">
+        <select id="d-status" onchange="changePlanStatus(this.value)" style="max-width:120px">
+          ${["draft","active","completed","archived"].map(x =>
+            `<option value="${x}" ${x===p.status?'selected':''}>${STATUS_LABELS[x]||x}</option>`).join("")}
+        </select>
+      </div>
+    </div>
+    <div class="muted mt" style="font-size:13px">${esc(p.version||"")} ·
+      ${fmtDate(p.start_at)} ~ ${fmtDate(p.end_at)} · 最近构建窗口 ${p.build_window} 次
+      ${p.copied_from ? ` · 复制自 <span class="mono">${esc(p.copied_from)}</span>` : ""}
+    </div>
+
+    <div class="mt">
+      <div class="row spread"><strong>整体进度</strong>
+        <span>${s.executed}/${s.total} 已执行 · 通过率 ${s.pass_rate}%</span></div>
+      <div class="mt">${progressBar(s.progress_pct/100, barCls)}</div>
+    </div>
+
+    <div class="grid cols-4 mt">
+      <div class="stat primary"><div class="v">${s.remaining}</div><div class="k">剩余工作量</div></div>
+      <div class="stat ${s.blocked?'bad':'good'}"><div class="v">${s.blocked}</div><div class="k">阻塞</div></div>
+      <div class="stat ${s.overdue_cases?'bad':'good'}"><div class="v">${s.overdue_cases}</div><div class="k">逾期用例</div></div>
+      <div class="stat good"><div class="v">${s.passed}</div><div class="k">通过</div></div>
+    </div>
+
+    <div class="mt row" style="gap:6px">
+      <button class="btn small green" onclick="runPlan()">▶ 执行计划用例</button>
+      <select id="run-env" style="max-width:170px"></select>
+      <button class="btn small secondary" onclick="sendRemind()">发送逾期提醒</button>
+      <button class="btn small secondary" onclick="copyPlan()">复制为新版本</button>
+      <button class="btn small secondary" onclick="editPlan()">编辑</button>
+      <button class="btn small danger" onclick="delPlan()">删除</button>
+    </div>
+    <div class="row mt" style="gap:6px">
+      <a class="btn small secondary" href="/page/reports.html?project_id=${p.project_id}">📄 测试报告</a>
+      <a class="btn small secondary" href="/page/monitor.html?project_id=${p.project_id}">🖥 执行监控</a>
+      <a class="btn small secondary" href="/page/defects.html?project_id=${p.project_id}">🐞 缺陷列表</a>
+    </div>
+
+    ${s.overdue_cases ? `<div class="mt" style="background:#fdecec;border:1px solid var(--red);border-radius:9px;padding:10px 12px">
+      <strong style="color:var(--red)">逾期未完成 ${s.overdue_cases} 条</strong>
+      <div class="muted" style="font-size:13px">${(p.overdue||[]).map(c =>
+        `${esc(c.case_name)}(${esc(c.assignee||"未分派")}，截止 ${fmtDate(c.due_at)})`).join("；")}</div>
+    </div>` : ""}
+
+    <div class="mt"><h3>里程碑</h3><div id="ms-list">${renderMilestones(p)}</div></div>
+
+    <div class="mt">
+      <div class="row spread">
+        <h3 style="margin:0">计划用例（${s.total}）</h3>
+        <button class="btn small" onclick="openAddCases()">＋ 分派用例</button>
+      </div>
+      <div id="members-wrap" class="mt">${renderMembers(p)}</div>
+    </div>
+
+    <div class="mt"><h3>关联构建（${(p.builds||[]).length}）</h3><div id="builds-wrap">${renderBuilds(p)}</div></div>
+    <div class="mt"><h3>关联缺陷（${(p.defects||[]).length}）</h3><div id="defects-wrap">${renderDefects(p)}</div></div>
+
+    <div class="muted mt pager-hint">
+      数字来源：执行状态取自本计划最近 ${p.build_window} 次构建
+      [${(p.sources.build_ids||[]).slice(0,3).map(x=>'<span class="mono">'+esc(x.slice(-10))+'</span>').join("，") || "暂无构建"}]，
+      与监控页/报告页同源；里程碑来自计划配置。生成于 ${fmtTime(p.sources.generated_at)}。
+    </div>`;
+
+  loadEnvs(p.project_id);
+}
+
+function renderMilestones(p) {
+  const ms = p.milestones || [];
+  if (!ms.length) return '<div class="muted" style="font-size:13px">未配置里程碑</div>';
+  return `<div>${ms.map((m, i) => `
+    <div class="ms-item">
+      <input type="checkbox" ${m.done?'checked':''} onchange="toggleMilestone(${i}, this.checked)" style="width:auto"
+        title="标记达成 / 未达成">
+      <span style="flex:1">${esc(m.name)}</span>
+      <span class="muted" style="font-size:12px">${fmtDate(m.due_at)}</span>
+      ${statusBadge(m.state)}
+      ${m.state !== 'done' && m.pending_cases ? `<span class="badge overdue">剩 ${m.pending_cases}</span>` : ''}
+    </div>`).join("")}</div>`;
+}
+
+function renderMembers(p) {
+  const members = p.members || [];
+  if (!members.length) return '<div class="empty">还没有分派用例</div>';
+  const statusOptions = ["", "passed", "failed", "blocked", "skipped"];
+  return `<table class="compact">
+    <thead><tr><th>用例</th><th>优先级</th><th>指派人</th><th>截止</th><th>执行状态</th><th>来源构建</th><th></th></tr></thead>
+    <tbody>${members.map(m => `
+      <tr style="${m.overdue?'background:#fff7f7':''}">
+        <td>${esc(m.case_name)}
+          ${m.overdue?'<span class="badge overdue">逾期</span>':''}
+          ${m.effective_status==='blocked' && m.block_reason ?
+            `<div class="muted" style="font-size:11px">⛔ ${esc(m.block_reason)}</div>` : ""}
+        </td>
+        <td>${priorityBadge(m.priority)}</td>
+        <td><input class="mini-input" value="${esc(m.assignee||"")}" style="min-width:80px"
+          onchange="patchMember('${m.id}', {assignee: this.value})" placeholder="未分派"></td>
+        <td><input type="date" class="mini-input" style="min-width:120px"
+          value="${toDateInput(m.due_at)}" onchange="patchMember('${m.id}', {due_at: this.value})"></td>
+        <td>${statusBadge(m.effective_status)}
+          <span class="member-src">${m.status_source==='build'?'构建':(m.status_source==='manual'?'手工':'—')}</span></td>
+        <td>${m.latest_build_id ?
+          `<a href="/page/reports.html?project_id=${p.project_id}&build_id=${m.latest_build_id}"
+             class="mono" style="font-size:12px">${esc((m.latest_build_name||m.latest_build_id).slice(-14))}</a>`
+          : '<span class="muted">—</span>'}</td>
+        <td>
+          <select class="mini-input" style="max-width:110px" onchange="setManualStatus('${m.id}', this.value)">
+            <option value="" ${!m.manual_status?'selected':''}>以构建为准</option>
+            ${statusOptions.filter(Boolean).map(x =>
+              `<option value="${x}" ${m.manual_status===x?'selected':''}>手工:${STATUS_LABELS[x]||x}</option>`).join("")}
+          </select>
+          <button class="btn small danger" onclick="removeMember('${m.id}')">移出</button>
+        </td>
+      </tr>`).join("")}</tbody></table>`;
+}
+
+function renderBuilds(p) {
+  const builds = p.builds || [];
+  if (!builds.length) return '<div class="muted" style="font-size:13px">暂无计划构建，点上方「执行计划用例」开始。</div>';
+  return `<table class="compact">
+    <thead><tr><th>构建</th><th>状态</th><th>通过</th><th>失败</th><th>耗时</th><th>时间</th><th></th></tr></thead>
+    <tbody>${builds.map(b => `<tr>
+      <td class="mono" style="font-size:12px">${esc((b.name||b.id).slice(-20))}</td>
+      <td>${statusBadge(b.status)}</td>
+      <td style="color:var(--green)">${b.passed}/${b.total}</td>
+      <td style="color:var(--red)">${(b.failed||0)+(b.error||0)+(b.timeout||0)}</td>
+      <td>${fmtDur(b.duration)}</td>
+      <td style="font-size:12px">${fmtTime(b.finished_at||b.started_at)}</td>
+      <td>
+        <a class="btn small secondary" href="/page/reports.html?project_id=${p.project_id}&build_id=${b.id}">报告</a>
+        <a class="btn small secondary" href="/page/monitor.html?project_id=${p.project_id}&build_id=${b.id}">监控</a>
+      </td></tr>`).join("")}</tbody></table>`;
+}
+
+function renderDefects(p) {
+  const defects = p.defects || [];
+  if (!defects.length) return '<div class="muted" style="font-size:13px">本计划用例暂无关联缺陷。</div>';
+  return `<table class="compact">
+    <thead><tr><th>标题</th><th>级别</th><th>状态</th><th>处理人</th><th></th></tr></thead>
+    <tbody>${defects.map(d => `<tr>
+      <td>${esc(d.title)}</td>
+      <td>${badge('severity', d.severity)}</td>
+      <td>${statusBadge(d.status)}</td>
+      <td>${esc(d.assignee||"—")}</td>
+      <td><a class="btn small secondary" href="/page/defects.html?project_id=${p.project_id}&defect_id=${d.id}">查看</a></td></tr>`).join("")}
+    </tbody></table>`;
+}
+
+async function loadEnvs(pid) {
+  const sel = $("#run-env");
+  if (!sel) return;
+  const d = await api(`/api/projects/${pid}/environments`);
+  sel.innerHTML = '<option value="">默认环境</option>' +
+    (d.environments||[]).map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join("");
+}
+
+/* ---------------- 操作 ---------------- */
+async function changePlanStatus(status) {
+  await api(`/api/plans/${currentPlanId}`, { method: "PUT", body: { status } });
+  toast("状态已更新");
+  await refreshAll();
+}
+
+async function toggleMilestone(index, done) {
+  const milestones = currentDetail.milestones.map((m, i) =>
+    i === index ? { ...m, done } : m);
+  await api(`/api/plans/${currentPlanId}`, { method: "PUT", body: { milestones } });
+  toast(done ? "里程碑已达成" : "已取消达成");
+  loadDetail(currentPlanId);
+  loadWorkload();
+}
+
+async function patchMember(itemId, patch) {
+  await api(`/api/plans/cases/${itemId}`, { method: "PUT", body: patch });
+  await loadDetail(currentPlanId);
+  loadWorkload();
+}
+
+async function setManualStatus(itemId, status) {
+  let patch = { manual_status: status || null };
+  if (status === "blocked") {
+    const reason = prompt("阻塞原因（可留空）：", "");
+    if (reason === null) return loadDetail(currentPlanId);
+    patch.block_reason = reason;
+  }
+  await api(`/api/plans/cases/${itemId}`, { method: "PUT", body: patch });
+  toast("已更新");
+  await loadDetail(currentPlanId);
+  loadWorkload();
+}
+
+async function removeMember(itemId) {
+  if (!confirm("把该用例移出计划？")) return;
+  await api(`/api/plans/cases/${itemId}`, { method: "DELETE" });
+  await loadDetail(currentPlanId);
+  loadWorkload();
+}
+
+async function runPlan() {
+  const env_id = $("#run-env").value || null;
+  try {
+    await api(`/api/plans/${currentPlanId}/run`, { method: "POST", body: { env_id } });
+    toast("构建已提交，进度将随构建结果更新");
+    setTimeout(() => loadDetail(currentPlanId), 1500);
+    setTimeout(() => { loadDetail(currentPlanId); loadWorkload(); loadPlans(); }, 6000);
+  } catch (e) { toast(e.message, "error"); }
+}
+
+async function sendRemind() {
+  try {
+    const r = await api(`/api/plans/${currentPlanId}/remind`, { method: "POST", body: {} });
+    toast(r.sent ? `已投递 ${r.sent} 条提醒` : (r.message || "暂无逾期或阻塞项"));
+  } catch (e) { toast(e.message, "error"); }
+}
+
+async function copyPlan() {
+  const src = currentDetail;
+  const name = prompt("新计划名称：", `${src.name} · 新版本`) ;
+  if (!name) return;
+  const version = prompt("新版本号：", (src.version || "").replace(/\d+\.\d+(\.\d+)?/,
+    v => { const parts = v.split("."); parts[1] = Number(parts[1]) + 1; return parts.join("."); })) || "";
+  const shift = prompt("时间整体后移多少天（里程碑/截止日同步平移）：", "30") || "0";
+  try {
+    const created = await api(`/api/plans/${currentPlanId}/copy`, {
+      method: "POST",
+      body: { name, version, shift_days: Number(shift) || 0 },
+    });
+    toast("已复制为新版本计划");
+    editingId = null;
+    await loadPlans();
+    loadDetail(created.id);
+  } catch (e) { toast(e.message, "error"); }
+}
+
+async function delPlan() {
+  if (!confirm("删除计划及其成员分派？（不删除用例与构建）")) return;
+  await api(`/api/plans/${currentPlanId}`, { method: "DELETE" });
+  currentPlanId = null; currentDetail = null;
+  $("#detail-card").innerHTML = '<div class="empty">请选择左侧计划查看详情</div>';
+  toast("已删除");
+  refreshAll();
+}
+
+/* ---------------- 分派用例弹窗（页内区块） ---------------- */
+async function openAddCases() {
+  const d = await api(`/api/projects/${projectId}/cases`);
+  allCases = d.cases || [];
+  const existing = new Set((currentDetail.members || []).map(m => m.case_id));
+  const host = $("#members-wrap");
+  host.innerHTML = `
+    <div style="border:1px solid var(--primary);border-radius:9px;padding:12px;background:var(--primary-soft)">
+      <div class="row">
+        <input type="text" id="add-q" placeholder="搜索用例…" oninput="filterCases()" style="flex:1">
+        <input type="text" id="add-assignee" placeholder="指派人，如 小王" style="max-width:160px">
+        <input type="date" id="add-due" style="max-width:160px">
+      </div>
+      <div id="case-picker" class="mt" style="max-height:260px;overflow:auto"></div>
+      <div class="row mt">
+        <button class="btn small" onclick="confirmAddCases()">确认分派</button>
+        <button class="btn small secondary" onclick="loadDetail(currentPlanId)">取消</button>
+      </div>
+    </div>`;
+  window._pickerCases = allCases.filter(c => !existing.has(c.id));
+  renderPicker(window._pickerCases);
+}
+
+function renderPicker(list) {
+  $("#case-picker").innerHTML = list.length ? list.map(c => `
+    <label class="row" style="padding:4px 0;font-weight:400">
+      <input type="checkbox" class="pick-case" value="${c.id}" style="width:auto">
+      <span style="flex:1">${esc(c.name)}</span>${priorityBadge(c.priority)}
+      ${(c.tags||[]).map(t => `<span class="tag">${esc(t)}</span>`).join("")}
+    </label>`).join("") : '<div class="empty">全部用例已在计划中</div>';
+}
+
+function filterCases() {
+  const q = $("#add-q").value.toLowerCase();
+  renderPicker(window._pickerCases.filter(c => (c.name + (c.description||"")).toLowerCase().includes(q)));
+}
+
+async function confirmAddCases() {
+  const ids = $$(".pick-case:checked").map(x => x.value);
+  if (!ids.length) return toast("请勾选用例", "error");
+  const assignee = $("#add-assignee").value.trim();
+  const due_at = $("#add-due").value || null;
+  await api(`/api/plans/${currentPlanId}/cases`, {
+    method: "POST", body: { case_ids: ids, assignee, due_at },
+  });
+  toast(`已分派 ${ids.length} 条用例`);
+  await loadDetail(currentPlanId);
+  loadWorkload();
+}
+
+init();
+</script>
+</body>
+</html>

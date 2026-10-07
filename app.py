@@ -21,7 +21,7 @@ if BASE_DIR not in sys.path:
 
 from engine import (Scheduler, TestExecutor, EnvironmentManager,          # noqa: E402
                     CoverageAnalyzer, ReportGenerator, DefectManager,
-                    NotificationManager)
+                    NotificationManager, PlanManager)
 from storage import StoreRegistry, BuildStoreRegistry                       # noqa: E402
 from web import api                                                         # noqa: E402
 from web.seed import seed_demo_data                                         # noqa: E402
@@ -45,6 +45,7 @@ def create_app(data_root: str | None = None) -> Flask:
     report_gen = ReportGenerator(build_registry)
     defects = DefectManager(registry)
     notify = NotificationManager(registry)
+    plans = PlanManager(registry, build_registry, notify)
     scheduler = Scheduler(
         registry, build_registry, executor, env_manager,
         report_gen, coverage, defects, notify,
@@ -61,6 +62,7 @@ def create_app(data_root: str | None = None) -> Flask:
     app.config["REPORT_GEN"] = report_gen
     app.config["DEFECTS"] = defects
     app.config["NOTIFY"] = notify
+    app.config["PLANS"] = plans
     app.config["JSON_AS_ASCII"] = False
 
     app.register_blueprint(api)
@@ -76,18 +78,24 @@ def create_app(data_root: str | None = None) -> Flask:
             name = name + ".html"
         return send_from_directory(os.path.join(BASE_DIR, "static", "pages"), name)
 
+    # -- 调度器生命周期 ----------------------------------------------------
+    scheduler.start()
+
     # -- 首次启动：无数据则自动生成演示数据并触发一次构建 --------------------
     # 让各页面一打开就有内容可点、可测，报告/覆盖率/缺陷/监控也有初始数据。
+    # 须在调度器启动后提交，否则任务进不了线程池。
     if not registry.store("projects").all():
-        seeded = seed_demo_data(registry, env_manager, notify)
+        seeded = seed_demo_data(registry, build_registry, env_manager, notify)
         try:
             scheduler.submit_build(
                 seeded["project"]["id"], seeded["suite_id"], trigger="auto_seed")
         except Exception:  # noqa: BLE001
             pass
-
-    # -- 调度器生命周期 ----------------------------------------------------
-    scheduler.start()
+        # 再为当前版本计划跑一场，让计划页一打开就有「来自构建」的进度
+        try:
+            plans.submit_run(seeded["plan_id"], scheduler)
+        except Exception:  # noqa: BLE001
+            pass
 
     @app.teardown_appcontext
     def _teardown(_exc=None):

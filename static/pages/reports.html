@@ -66,7 +66,10 @@ async function init() {
   const params = new URLSearchParams(location.search);
   projectId = await fillProjectSelect($("#project-select"), params.get("project_id"));
   await loadAll();
-  if (builds[0]) selectBuild(builds[0].id);
+  // 支持从测试计划页带 build_id 深链，直接定位对应构建报告
+  const wantBuild = params.get("build_id");
+  if (wantBuild && builds.some(b => b.id === wantBuild)) selectBuild(wantBuild);
+  else if (builds[0]) selectBuild(builds[0].id);
 }
 
 async function switchProject(id) { projectId = id; currentBuild = null; await loadAll(); }

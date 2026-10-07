@@ -72,10 +72,15 @@ async function init() {
   const params = new URLSearchParams(location.search);
   projectId = await fillProjectSelect($("#project-select"), params.get("project_id"));
   await loadBuilds();
-  // 自动选中最近一个运行中的构建
-  const running = builds.find(b => b.status === "running");
-  if (running) selectBuild(running.id);
-  else if (builds[0]) selectBuild(builds[0].id);
+  // 支持从测试计划页带 build_id 深链
+  const wantBuild = params.get("build_id");
+  if (wantBuild && builds.some(b => b.id === wantBuild)) selectBuild(wantBuild);
+  else {
+    // 自动选中最近一个运行中的构建
+    const running = builds.find(b => b.status === "running");
+    if (running) selectBuild(running.id);
+    else if (builds[0]) selectBuild(builds[0].id);
+  }
 }
 
 async function switchProject(id) { projectId = id; currentBuild = null; stopPoll(); await loadBuilds(); }

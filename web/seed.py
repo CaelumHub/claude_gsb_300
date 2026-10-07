@@ -11,9 +11,10 @@ from __future__ import annotations
 import time
 
 from engine import new_id
+from engine.plans import PlanManager, parse_date
 
 
-def seed_demo_data(registry, env_mgr, notify_mgr) -> dict:
+def seed_demo_data(registry, build_registry, env_mgr, notify_mgr) -> dict:
     """生成演示项目，返回 ``{"project": ..., "env_id": ..., "suite_id": ...}``。"""
     proj = {
         "id": new_id("proj"),
@@ -137,7 +138,60 @@ def seed_demo_data(registry, env_mgr, notify_mgr) -> dict:
         "type": "email",
         "name": "团队邮件",
         "config": {"address": "qa@example.com"},
-        "events": ["build.failed"],
+        "events": ["build.failed", "plan.overdue"],
     })
 
-    return {"project": proj, "env_id": env["id"], "suite_id": suite["id"]}
+    # -- 测试计划：按版本组织，分派到不同测试人员，带里程碑与时间范围 ------
+    plan_mgr = PlanManager(registry, build_registry, notify_mgr)
+    today = time.time()
+
+    # 上一个版本 v2.30：已逾期未完成（用于演示逾期提醒 / 复制为新版本）
+    plan_prev = plan_mgr.create(pid, {
+        "name": "v2.30 回归测试",
+        "version": "v2.30",
+        "description": "上一个版本的回归计划，部分用例逾期未完成。",
+        "status": "active",
+        "start_at": time.strftime("%Y-%m-%d", time.localtime(today - 20 * 86400)),
+        "end_at": time.strftime("%Y-%m-%d", time.localtime(today - 2 * 86400)),
+        "build_window": 5,
+        "milestones": [
+            {"name": "冒烟完成", "due_at": time.strftime("%Y-%m-%d", time.localtime(today - 14 * 86400))},
+            {"name": "全量回归", "due_at": time.strftime("%Y-%m-%d", time.localtime(today - 5 * 86400))},
+            {"name": "上线评审", "due_at": time.strftime("%Y-%m-%d", time.localtime(today - 2 * 86400))},
+        ],
+    })
+    pid_prev = plan_prev["id"]
+    plan_mgr.add_cases(pid_prev, [c6, c7, c8], assignee="小李",
+                       due_at=time.strftime("%Y-%m-%d", time.localtime(today - 3 * 86400)))
+    # 手工标记一条阻塞，便于阻塞项汇总展示
+    blocked_item = [m for m in plan_mgr.detail(pid_prev)["members"]
+                    if m["case_id"] == c6][0]
+    plan_mgr.update_case(blocked_item["id"], {
+        "manual_status": "blocked", "manual_by": "小李",
+        "block_reason": "第三方支付沙箱不可用，等待环境恢复",
+    })
+
+    # 当前版本 v2.31：进行中，覆盖全部用例，分派给两位测试人员
+    plan_cur = plan_mgr.create(pid, {
+        "name": "v2.31 版本测试",
+        "version": "v2.31",
+        "description": "当前版本的功能 + 回归测试计划。",
+        "status": "active",
+        "start_at": time.strftime("%Y-%m-%d", time.localtime(today - 5 * 86400)),
+        "end_at": time.strftime("%Y-%m-%d", time.localtime(today + 9 * 86400)),
+        "build_window": 5,
+        "milestones": [
+            {"name": "冒烟完成", "due_at": time.strftime("%Y-%m-%d", time.localtime(today - 1 * 86400))},
+            {"name": "功能测试完成", "due_at": time.strftime("%Y-%m-%d", time.localtime(today + 3 * 86400))},
+            {"name": "全量回归", "due_at": time.strftime("%Y-%m-%d", time.localtime(today + 7 * 86400))},
+            {"name": "上线评审", "due_at": time.strftime("%Y-%m-%d", time.localtime(today + 9 * 86400))},
+        ],
+    })
+    pid_cur = plan_cur["id"]
+    plan_mgr.add_cases(pid_cur, [c1, c2, c3, c4], assignee="小王",
+                       due_at=time.strftime("%Y-%m-%d", time.localtime(today + 2 * 86400)))
+    plan_mgr.add_cases(pid_cur, [c5, c6, c7, c8], assignee="小张",
+                       due_at=time.strftime("%Y-%m-%d", time.localtime(today + 6 * 86400)))
+
+    return {"project": proj, "env_id": env["id"], "suite_id": suite["id"],
+            "plan_id": pid_cur, "prev_plan_id": pid_prev}
